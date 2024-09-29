@@ -34,6 +34,7 @@ def get_now_playing_movies():
         )
 
     return formatted_movies
+    # return "Error: There was an error retrieving the showtimes"
 
 def get_showtimes(title, location):
     params = {
