@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import chainlit as cl
 import asyncio
 import re
+import json
 
 load_dotenv()
 
@@ -30,6 +31,23 @@ def on_chat_start():
     message_history = [{"role": "system", "content": SYSTEM_PROMPT}]
     cl.user_session.set("message_history", message_history)
 
+def extract_json_from_response(text):
+    # Regex pattern to find JSON block enclosed in ```json ... ```
+    json_pattern = r'```json(.*?)```'
+    
+    # Search for the JSON block in the response
+    json_match = re.search(json_pattern, text, re.DOTALL)
+    
+    if json_match:
+        json_str = json_match.group(1).strip()  # Extract the JSON block
+        try:
+            parsed_json = json.loads(json_str)  # Parse the JSON block
+            return parsed_json
+        except json.JSONDecodeError as e:
+            return None
+    else:
+        return None
+
 @observe
 async def get_response(client, message_history, gen_kwargs):
     response_string = ""
@@ -56,14 +74,14 @@ async def print_response(response_text):
     return response_message
 
 @observe
-async def call_function(function_name):
-    if function_name == "get_now_playing_movies":
+async def call_function(function_json):
+    if function_json["function_name"] == "get_now_playing_movies":
         response = get_now_playing_movies()
-    elif function_name == "get_showtimes":
-        response = get_showtimes()
-    elif function_name == "buy_ticket":
+    elif function_json["function_name"] == "get_showtimes":
+        response = get_showtimes(function_json["params"]["title"], function_json["params"]["location"])
+    elif function_json["function_name"] == "buy_ticket":
         response = buy_ticket()
-    elif function_name == "get_reviews":
+    elif function_json["function_name"] == "get_reviews":
         response = get_reviews()
     else:
         response = "Invalid function"
@@ -77,6 +95,7 @@ async def generate_response(client, message_history, gen_kwargs):
 
     return response_text
 
+
 @cl.on_message
 @observe
 async def on_message(message: cl.Message):
@@ -88,10 +107,19 @@ async def on_message(message: cl.Message):
 
     response_text = await generate_response(client, message_history, gen_kwargs)
 
-    if response_text in function_names:
-        function_response = await call_function(response_text.lower())
-        message_history.append({"role": "system", "content": function_response})
-        response_text = await generate_response(client, message_history, gen_kwargs)
+    try:
+        parsed_json = extract_json_from_response(response_text)
+        
+        if parsed_json and "function_name" in parsed_json and parsed_json["function_name"] in function_names:
+            matched_function = parsed_json["function_name"]
+            print(f"Matched function: {matched_function}")
+            
+            function_response = await call_function(parsed_json)
+            message_history.append({"role": "system", "content": function_response})
+            response_text = await generate_response(client, message_history, gen_kwargs)
+
+    except json.JSONDecodeError as e:
+        print(f"JSONDecodeError: {e}")
 
     response_message = await print_response(response_text)
     message_history.append({"role": "assistant", "content": response_text})
