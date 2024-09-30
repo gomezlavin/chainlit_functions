@@ -42,21 +42,13 @@ def extract_json_from_response(text):
         json_str = json_match.group(1).strip()  # Extract the JSON block
         try:
             parsed_json = json.loads(json_str)  # Parse the JSON block
+            #print(f"Parsed JSON: {parsed_json}")
             return parsed_json
         except json.JSONDecodeError as e:
+            #print(f"Error parsing JSON: {e}")
             return None
     else:
         return None
-
-@observe
-async def get_response(client, message_history, gen_kwargs):
-    response_string = ""
-    stream = await client.chat.completions.create(messages=message_history, stream=True, **gen_kwargs)
-    async for part in stream:
-        if token := part.choices[0].delta.content or "":
-            response_string += token
-
-    return [response_string,stream]
 
 @observe
 async def print_response(response_text):
@@ -102,25 +94,32 @@ async def on_message(message: cl.Message):
     message_history = cl.user_session.get("message_history", [])
     message_history.append({"role": "user", "content": message.content})
 
-    message_history = cl.user_session.get("message_history", [])
-    message_history.append({"role": "user", "content": message.content})
-
+    # Generate initial response
     response_text = await generate_response(client, message_history, gen_kwargs)
+    print(response_text)
 
-    try:
+    # Set up a while loop to handle multiple function calls in sequence
+    while True:
+        # Extract potential function call from the response
         parsed_json = extract_json_from_response(response_text)
-        
+
+        # If a function call is detected
         if parsed_json and "function_name" in parsed_json and parsed_json["function_name"] in function_names:
             matched_function = parsed_json["function_name"]
             print(f"Matched function: {matched_function}")
             
+            # Call the matched function and update message history
             function_response = await call_function(parsed_json)
             message_history.append({"role": "system", "content": function_response})
+            
+            # Generate the next response based on the updated message history
             response_text = await generate_response(client, message_history, gen_kwargs)
 
-    except json.JSONDecodeError as e:
-        print(f"JSONDecodeError: {e}")
+        else:
+            # No more functions to call, break the loop
+            break
 
+    # After loop is finished, print the final response
     response_message = await print_response(response_text)
     message_history.append({"role": "assistant", "content": response_text})
     cl.user_session.set("message_history", message_history)
