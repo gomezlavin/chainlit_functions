@@ -72,7 +72,20 @@ async def call_function(function_json):
     elif function_json["function_name"] == "get_showtimes":
         response = get_showtimes(function_json["params"]["title"], function_json["params"]["location"])
     elif function_json["function_name"] == "buy_ticket":
-        response = buy_ticket()
+        theater = function_json["params"]["theater"]
+        title = function_json["params"]["title"]
+        showtime = function_json["params"]["showtime"]
+        
+        # Call the confirmation function instead of buying directly
+        response = await confirm_ticket_purchase(theater, title, showtime)
+    elif function_json["function_name"] == "confirm_ticket_purchase":
+        # Confirm ticket purchase
+        theater = function_json["params"]["theater"]
+        title = function_json["params"]["title"]
+        showtime = function_json["params"]["showtime"]
+        
+        # Assume this function returns a message about the ticket purchase
+        response = buy_ticket(theater, title, showtime)
     elif function_json["function_name"] == "get_reviews":
         response = get_reviews()
     else:
@@ -81,12 +94,47 @@ async def call_function(function_json):
     return response
 
 @observe
+async def confirm_ticket_purchase(theater, title, showtime):
+    # This function generates the confirmation message
+    confirmation_message = (
+        f"Please confirm your ticket purchase:\n"
+        f"Theater: {theater}\n"
+        f"Movie: {title}\n"
+        f"Showtime: {showtime}\n"
+        "Type 'yes' to confirm or 'no' to cancel."
+    )
+    # Respond with the confirmation message as JSON
+    return {
+        "function_name": "confirm_ticket_purchase",
+        "params": {
+            "theater": theater,
+            "title": title,
+            "showtime": showtime,
+            "confirmation_message": confirmation_message
+        }
+    }
+
+@observe
 async def generate_response(client, message_history, gen_kwargs):
     response = await client.chat.completions.create(messages=message_history, **gen_kwargs)
     response_text = response.choices[0].message.content
 
     return response_text
 
+async def get_user_confirmation(message_history):
+    # Assume the user is prompted to confirm their purchase
+    # Wait for the next message from the user after the confirmation prompt
+    user_confirmation = cl.user_session.get("latest_user_message", "")
+    
+    while not user_confirmation:
+        # Wait for a short duration and check again for user input
+        await asyncio.sleep(1)
+        user_confirmation = cl.user_session.get("latest_user_message", "")
+
+    # Clear the latest user message after capturing it
+    cl.user_session.set("latest_user_message", "")
+    
+    return user_confirmation
 
 @cl.on_message
 @observe
@@ -94,32 +142,35 @@ async def on_message(message: cl.Message):
     message_history = cl.user_session.get("message_history", [])
     message_history.append({"role": "user", "content": message.content})
 
-    # Generate initial response
     response_text = await generate_response(client, message_history, gen_kwargs)
-    print(response_text)
-
-    # Set up a while loop to handle multiple function calls in sequence
+    
     while True:
-        # Extract potential function call from the response
         parsed_json = extract_json_from_response(response_text)
 
-        # If a function call is detected
         if parsed_json and "function_name" in parsed_json and parsed_json["function_name"] in function_names:
             matched_function = parsed_json["function_name"]
             print(f"Matched function: {matched_function}")
-            
-            # Call the matched function and update message history
-            function_response = await call_function(parsed_json)
-            message_history.append({"role": "system", "content": function_response})
-            
-            # Generate the next response based on the updated message history
-            response_text = await generate_response(client, message_history, gen_kwargs)
 
+            if matched_function == "confirm_ticket_purchase":
+                confirmation_message = parsed_json["params"]["confirmation_message"]
+                await print_response(confirmation_message)
+
+                # Wait for user confirmation
+                user_response = await get_user_confirmation(message_history)
+
+                if user_response.lower() == 'yes':
+                    # Call the buy_ticket function if confirmed
+                    function_response = await call_function(parsed_json)
+                else:
+                    function_response = "Ticket purchase canceled."
+            else:
+                function_response = await call_function(parsed_json)
+
+            message_history.append({"role": "system", "content": function_response})
+            response_text = await generate_response(client, message_history, gen_kwargs)
         else:
-            # No more functions to call, break the loop
             break
 
-    # After loop is finished, print the final response
     response_message = await print_response(response_text)
     message_history.append({"role": "assistant", "content": response_text})
     cl.user_session.set("message_history", message_history)
